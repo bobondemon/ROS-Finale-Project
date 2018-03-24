@@ -11,6 +11,10 @@ import tf
 import cv2
 import yaml
 
+# New imports
+import math
+import numpy as np
+
 STATE_COUNT_THRESHOLD = 3
 
 class TLDetector(object):
@@ -49,16 +53,50 @@ class TLDetector(object):
         self.last_wp = -1
         self.state_count = 0
 
+        # New local variables
+        self.is_classfied_waypoints_by_tl = False
+        self.waypoints_to_tl_idx = None # self.waypoints_to_tl_idx[i]=j means that ith waypoint is closet to jth traffic light
+
         rospy.spin()
 
     def pose_cb(self, msg):
-        self.pose = msg
+        self.pose = msg.pose
+        # self.pose.position.[x,y,z]
+        # self.pose.orientation.[x,y,z,w] # Quanternion
+        # rospy.loginfo('[CSChen] self.pose.position.(x,y,z)=({},{},{})'.format(self.pose.position.x,self.pose.position.y,self.pose.position.z))
 
-    def waypoints_cb(self, waypoints):
-        self.waypoints = waypoints
+    def waypoints_cb(self, msg):
+        # Publish to /base_waypoints only once
+        wpCount = len(msg.waypoints)
+        if self.waypoints is None:
+            self.waypoints = msg.waypoints
+            rospy.loginfo('[CSChen] Received %s waypoints', wpCount)
+
+    def classify_waypoints_by_tl(self):
+        rtn_waypoints_to_tl_idx = []
+        for wp in self.waypoints:
+            minidx = np.argmin([self.distance(wp.pose.pose.position, l.pose.pose.position) for l in self.lights])
+            rtn_waypoints_to_tl_idx.append(minidx)
+        # print('[CSChen] {}'.format(rtn_waypoints_to_tl_idx))
+        return rtn_waypoints_to_tl_idx
 
     def traffic_cb(self, msg):
-        self.lights = msg.lights
+        self.lights = msg.lights  # styx_msgs/TrafficLight[]
+        # self.lights[i] is of Type styx_msgs/TrafficLight, has attributes describing bellow:
+        # self.lights[i].pose.pose.[position, orientation]
+        # self.lights[i].state has velue TrafficLight.[RED, YELLOW, GREEN, UNKNOWN]
+        # rospy.loginfo('[CSChen] Received %s traffic lights', len(self.lights))  # 8 traffic lights
+
+        if not self.is_classfied_waypoints_by_tl and not self.waypoints==None:
+            self.waypoints_to_tl_idx = self.classify_waypoints_by_tl()
+            rospy.loginfo('[CSChen] len(self.waypoints_to_tl_idx)={}. NOTE: This msg should not show up more than twice'.format(len(self.waypoints_to_tl_idx)))
+            self.is_classfied_waypoints_by_tl = True
+
+        # rospy.loginfo('[CSChen] Received self.lights[3].pose.pose.position.y={}'.format(self.lights[3].pose.pose.position.y))
+        # rospy.loginfo('[CSChen] Received self.lights[3].pose.pose.orientation.w={}'.format(self.lights[3].pose.pose.orientation.w))
+        # rospy.loginfo('[CSChen] Received self.lights[3].state={}'.format(self.lights[3].state))
+
+
 
     def image_cb(self, msg):
         """Identifies red lights in the incoming camera image and publishes the index
@@ -70,6 +108,9 @@ class TLDetector(object):
         """
         self.has_image = True
         self.camera_image = msg
+        # Finds closest visible traffic light, if one exists, and determines its location and color
+        # ligth_wp is the index (if no visible traffic sign, then -1)
+        # state is the light status: TrafficLight.[RED, YELLOW, GREEN, UNKNOWN]
         light_wp, state = self.process_traffic_lights()
 
         '''
@@ -90,6 +131,9 @@ class TLDetector(object):
             self.upcoming_red_light_pub.publish(Int32(self.last_wp))
         self.state_count += 1
 
+    def distance(self, p1, p2):
+        return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2)
+
     def get_closest_waypoint(self, pose):
         """Identifies the closest path waypoint to the given position
             https://en.wikipedia.org/wiki/Closest_pair_of_points_problem
@@ -101,6 +145,25 @@ class TLDetector(object):
 
         """
         #TODO implement
+        # Comparing pose.position.[x,y,z] with self.waypoints to find out the closest waypoint
+        # rospy.loginfo('[CSChen] self.pose.position.(x,y,z)=({},{},{})'.format(self.pose.position.x,self.pose.position.y,self.pose.position.z))
+
+        rtn_idx = -1
+        min_dist = float('inf')
+        # TODO: Having problem when reach the boundary of self.waypoints, need fix
+        startidx = 0
+        endidx = len(self.waypoints)
+        waypoint_search_range = 50
+        if not self.last_wp == -1:
+            startidx = max(0, self.last_wp-waypoint_search_range)
+            endidx = min(len(self.waypoints), self.last_wp+waypoint_search_range)
+        for i, wp in enumerate(self.waypoints[startidx:endidx]):
+            dist = self.distance(pose.position, wp.pose.pose.position)
+            if dist < min_dist:
+                min_dist = dist
+                rtn_idx = i + startidx
+        assert(rtn_idx!=-1)
+        rospy.loginfo('[CSChen] rtn_idx={}, min_dist={}'.format(rtn_idx,min_dist))
         return 0
 
     def get_light_state(self, light):
@@ -136,14 +199,15 @@ class TLDetector(object):
         # List of positions that correspond to the line to stop in front of for a given intersection
         stop_line_positions = self.config['stop_line_positions']
         if(self.pose):
-            car_position = self.get_closest_waypoint(self.pose.pose)
+            car_position = self.get_closest_waypoint(self.pose)
 
         #TODO find the closest visible traffic light (if one exists)
-
-        if light:
-            state = self.get_light_state(light)
-            return light_wp, state
-        self.waypoints = None
+        light_idx = self.waypoints_to_tl_idx[car_position]
+        light = self.lights[light_idx]
+        # if light:
+        #     state = self.get_light_state(light)
+        #     return light_wp, state
+        # self.waypoints = None
         return -1, TrafficLight.UNKNOWN
 
 if __name__ == '__main__':

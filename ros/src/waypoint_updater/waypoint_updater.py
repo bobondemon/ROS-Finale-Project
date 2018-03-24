@@ -3,6 +3,7 @@
 import rospy
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
+from tf.transformations import quaternion_from_euler
 
 import math
 
@@ -27,26 +28,95 @@ LOOKAHEAD_WPS = 200 # Number of waypoints we will publish. You can change this n
 class WaypointUpdater(object):
     def __init__(self):
         rospy.init_node('waypoint_updater')
+        rospy.loginfo('='*10+' [CSChen]: Init WaypointUpdater Node')
 
         rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
+        # rospy.Subscriber('/traffic_waypoint',Int32, self.traffic_cb)
 
 
-        self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
+        self.final_lane_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
 
         # TODO: Add other member variables you need below
+        self.rate = rospy.Rate(10)
+        start_time = 0
+        self.cur_pose = None
+        self.base_lane = None
+        self.final_lane = None
+
+        
+
+        while not start_time:
+            start_time = rospy.Time.now().to_sec()
+
+        while not rospy.is_shutdown():
+
+            q_rot1 = quaternion_from_euler(math.pi, 0, 0)
+            rospy.loginfo('='*10+' [CSChen]: rpy (math.pi, 0, 0) = (x,y,z,w) {}'.format(q_rot1))
+
+            q_rot2 = quaternion_from_euler(0, 0, 0)
+            rospy.loginfo('='*10+' [CSChen]: rpy (0, 0, 0) = (x,y,z,w) {}'.format(q_rot2))
+
+            q_rot3 = quaternion_from_euler(0, math.pi, 0)
+            rospy.loginfo('='*10+' [CSChen]: rpy (0, math.pi, 0) = (x,y,z,w) {}'.format(q_rot3))
+
+            q_rot4 = quaternion_from_euler(0, 0, math.pi)
+            rospy.loginfo('='*10+' [CSChen]: rpy (0, 0, math.pi) = (x,y,z,w) {}'.format(q_rot4))
+
+            q_rot5 = quaternion_from_euler(0, math.pi, math.pi)
+            rospy.loginfo('='*10+' [CSChen]: rpy (0, math.pi, math.pi) = (x,y,z,w) {}'.format(q_rot5))
+
+            # elapsed = rospy.Time.now().to_sec() - start_time
+            self.final_lane = self.filter_past_wp(self.base_lane,self.cur_pose)
+            if not self.final_lane == None:
+                self.final_lane_pub.publish(self.final_lane)
+            self.rate.sleep()
 
         rospy.spin()
 
-    def pose_cb(self, msg):
-        # TODO: Implement
-        pass
+    def filter_past_wp(self,base_lane,cur_pose):
+        if base_lane == None:
+            # rospy.loginfo('='*10+' [CSChen]: base_line is None')
+            return None
+        if cur_pose == None:
+            # rospy.loginfo('='*10+' [CSChen]: cur_pose is None')
+            return None
+        rtn_waypoint = []
+        counter = 1
+        for bwp in base_lane.waypoints:
+            if bwp.pose.pose.position.x > cur_pose.pose.position.x and counter <= LOOKAHEAD_WPS:
+                # wp = Waypoint(bwp)
+                bwp.twist.twist.linear.x = 50
+                rtn_waypoint.append(bwp)
+                counter += 1
+            # rtn_waypoint.append(bwp)
+            # counter += 1
+        # rospy.loginfo('='*10+' [CSChen]: publishing {} of waypoints'.format(len(rtn_waypoint)))
+        rtn_final_lane = Lane()
+        rtn_final_lane.header = base_lane.header
+        rtn_final_lane.waypoints = rtn_waypoint
+        v = self.get_waypoint_velocity(rtn_waypoint[-1])
+        # rospy.loginfo('='*10+' [CSChen]: rtn_waypoint velocity = {}'.format(v))
+        return rtn_final_lane
 
-    def waypoints_cb(self, waypoints):
+    def pose_cb(self, msg):
+        # msg type: geometry_msgs/PoseStamped
         # TODO: Implement
-        pass
+        # rospy.loginfo('='*10+' [CSChen]: cur_pose = {},{},{}; cur_pose.header.stamp = {}'.format(msg.pose.position.x,msg.pose.position.y,msg.pose.position.z,msg.header.stamp))
+        # print('='*10+' [CSChen]: cur_pose')
+        # rospy.loginfo('='*10+' [CSChen]: cur_pose = {}'.format(msg)
+        self.cur_pose = msg
+
+    def waypoints_cb(self, lane):
+        # TODO: Implement
+        if self.base_lane==None:
+            rospy.loginfo('='*10+' [CSChen]: Assigning base_waypoint')
+            self.base_lane = lane
+        else:
+            rospy.loginfo('='*10+' [CSChen]: Having more than two times of base_waypoint')
+            # print('='*10+' [CSChen]: Having more than two times of base_waypoint')
 
     def traffic_cb(self, msg):
         # TODO: Callback for /traffic_waypoint message. Implement
